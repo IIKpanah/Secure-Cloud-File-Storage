@@ -1,0 +1,131 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Secure user profile including cryptographic public keys and backend-stored encrypted private keys.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "salt": { "type": "string" },
+        "role": { "type": "string", "enum": ["Admin", "User"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "publicKeyPem": { "type": "string" },
+        "privateKeyPemEncrypted": { "type": "string" }
+      },
+      "required": ["id", "username", "passwordHash", "salt", "role", "publicKeyPem"]
+    },
+    "FileMetadata": {
+      "title": "File Metadata",
+      "description": "Metadata for encrypted files stored in the vault.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "originalName": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "size": { "type": "integer" },
+        "encryptedSize": { "type": "integer" },
+        "checksum": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerUsername": { "type": "string" },
+        "storagePath": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isClientEncrypted": { "type": "boolean" }
+      },
+      "required": ["id", "originalName", "ownerId", "checksum"]
+    },
+    "FileKeyRecord": {
+      "title": "File Key Mapping",
+      "description": "Hybrid encryption key records mapping users to their wrapped file session keys.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fileId": { "type": "string" },
+        "userId": { "type": "string" },
+        "wrappedKey": { "type": "string" },
+        "wrappedIv": { "type": "string" },
+        "wrappedByPublicThumbprint": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "fileId", "userId", "wrappedKey", "wrappedIv"]
+    },
+    "FileACL": {
+      "title": "Access Control List",
+      "description": "Permissions mapping for individual files.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fileId": { "type": "string" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "permission": { "type": "string", "enum": ["read", "write"] },
+        "grantedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "fileId", "userId", "permission"]
+    },
+    "AuditLog": {
+      "title": "Security Audit Log",
+      "description": "Immutable trail of all security and cryptographic operations.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "eventType": { "type": "string" },
+        "status": { "type": "string" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "fileId": { "type": "string" },
+        "fileName": { "type": "string" },
+        "ipAddress": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "eventType", "status"]
+    },
+    "PerformanceMetric": {
+      "title": "Performance Metric",
+      "description": "Operational analytics for cryptographic throughput and latency.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "operation": { "type": "string" },
+        "fileSize": { "type": "integer" },
+        "durationMs": { "type": "integer" },
+        "throughputMbps": { "type": "number" },
+        "memoryBeforeMb": { "type": "integer" },
+        "memoryAfterMb": { "type": "integer" },
+        "concurrencyCount": { "type": "integer" },
+        "integrityVerified": { "type": "boolean" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "operation", "durationMs"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "System users and their cryptographic profiles."
+    },
+    "files": {
+      "schema": "FileMetadata",
+      "description": "Encrypted file metadata registry."
+    },
+    "keyRecords": {
+      "schema": "FileKeyRecord",
+      "description": "Mapping of wrapped session keys for users."
+    },
+    "acls": {
+      "schema": "FileACL",
+      "description": "Permission records for files."
+    },
+    "auditLogs": {
+      "schema": "AuditLog",
+      "description": "Security audit trail."
+    },
+    "performanceMetrics": {
+      "schema": "PerformanceMetric",
+      "description": "Encryption performance telemetry."
+    }
+  }
+}

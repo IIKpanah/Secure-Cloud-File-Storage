@@ -1,0 +1,138 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ======================================================
+    // 1. GLOBAL HELPERS & PRIMITIVES
+    // ======================================================
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+    
+    // RBAC: Check for Admin status using a bootstrap list or trusted collection
+    function isAdmin() {
+      return isEmailVerified() && (
+        request.auth.token.email == 'iikpanah2018@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // ======================================================
+    // 2. VALIDATION BLUEPRINTS
+    // ======================================================
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'username', 'role', 'publicKeyPem']) &&
+             data.id is string && data.id.size() <= 64 &&
+             data.username is string && data.username.size() >= 3 && data.username.size() <= 32 &&
+             data.role in ['Admin', 'User'] &&
+             data.publicKeyPem is string && data.publicKeyPem.size() <= 4096;
+    }
+
+    function isValidFile(data) {
+      return data.keys().hasAll(['id', 'originalName', 'ownerId', 'checksum']) &&
+             data.id is string && data.id.size() <= 64 &&
+             data.originalName is string && data.originalName.size() <= 256 &&
+             data.checksum is string && data.checksum.size() == 64 &&
+             data.ownerId == request.auth.uid;
+    }
+
+    function isValidACL(data) {
+      return data.keys().hasAll(['id', 'fileId', 'userId', 'permission']) &&
+             data.permission in ['read', 'write'] &&
+             data.userId is string && data.fileId is string;
+    }
+
+    // ======================================================
+    // 3. COLLECTION MATCH BLOCKS
+    // ======================================================
+
+    // Catch-all Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // USER PROFILES
+    match /users/{userId} {
+      allow get: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isEmailVerified() && isOwner(userId) && isValidUser(incoming()) && incoming().role == 'User';
+      allow update: if isEmailVerified() && (
+        (isOwner(userId) && isValidUser(incoming()) && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['username', 'publicKeyPem', 'privateKeyPemEncrypted'])) ||
+        isAdmin()
+      );
+    }
+
+    // FILE METADATA
+    match /files/{fileId} {
+      allow get: if isEmailVerified() && (
+        isOwner(existing().ownerId) || 
+        exists(/databases/$(database)/documents/acls/$(fileId + '_' + request.auth.uid)) ||
+        isAdmin()
+      );
+      allow list: if isEmailVerified(); // Enforced by client queries + Firestore Index behavior
+      allow create: if isEmailVerified() && isValidId(fileId) && isValidFile(incoming());
+      allow update: if isEmailVerified() && (
+        (isOwner(existing().ownerId) && incoming().ownerId == existing().ownerId && incoming().diff(existing()).affectedKeys().hasOnly(['originalName', 'mimeType'])) ||
+        isAdmin()
+      );
+      allow delete: if isEmailVerified() && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    // ACCESS CONTROL LISTS
+    match /acls/{aclId} {
+      function canManageAcl(fId) {
+        return get(/databases/$(database)/documents/files/$(fId)).data.ownerId == request.auth.uid;
+      }
+
+      allow read: if isEmailVerified() && (existing().userId == request.auth.uid || canManageAcl(existing().fileId) || isAdmin());
+      allow create: if isEmailVerified() && canManageAcl(incoming().fileId) && isValidACL(incoming());
+      allow delete: if isEmailVerified() && (canManageAcl(existing().fileId) || isAdmin());
+    }
+
+    // KEY RECORDS (Wrapped Session Keys)
+    match /keyRecords/{recordId} {
+      allow get: if isEmailVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isEmailVerified() && (
+        incoming().userId == request.auth.uid || 
+        get(/databases/$(database)/documents/files/$(incoming().fileId)).data.ownerId == request.auth.uid
+      );
+      allow delete: if isEmailVerified() && isAdmin();
+    }
+
+    // AUDIT LOGS (Immutable)
+    match /auditLogs/{logId} {
+      allow get: if isEmailVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isEmailVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isEmailVerified() && incoming().userId == request.auth.uid && incoming().timestamp == request.time;
+      allow update, delete: if false; // Immutable
+    }
+
+    // PERFORMANCE METRICS
+    match /performanceMetrics/{metricId} {
+      allow read: if isAdmin();
+      allow create: if isEmailVerified() && incoming().durationMs is number && incoming().durationMs < 60000;
+    }
+  }
+}

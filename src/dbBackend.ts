@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import admin from "firebase-admin";
 import fs from "fs";
 import path from "path";
 import {
@@ -19,272 +20,191 @@ import {
 } from "./types.js";
 import { generateRSAKeyPair, hashPassword } from "./cryptoBackend.js";
 
-// Database storage configurations
-const VAULT_DIR = path.join(process.cwd(), "vault");
-const FILES_DIR = path.join(VAULT_DIR, "files");
-const DB_FILE = path.join(VAULT_DIR, "db.json");
+let firestoreInstance: admin.firestore.Firestore | null = null;
 
-interface DatabaseSchema {
-  users: User[];
-  files: FileMetadata[];
-  keyRecords: FileKeyRecord[];
-  acls: FileACL[];
-  auditLogs: AuditLog[];
-  performanceMetrics: PerformanceMetric[];
+function getFirestore(): admin.firestore.Firestore {
+  if (!firestoreInstance) {
+    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    if (!fs.existsSync(configPath)) {
+      throw new Error("firebase-applet-config.json not found. Please ensure Firebase is set up.");
+    }
+    const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+    if (!admin.apps.length) {
+      admin.initializeApp({
+        projectId: firebaseConfig.projectId
+      });
+    }
+    firestoreInstance = admin.firestore(firebaseConfig.firestoreDatabaseId || "(default)");
+  }
+  return firestoreInstance;
 }
 
-class DatabaseEngine {
-  private data: DatabaseSchema = {
-    users: [],
-    files: [],
-    keyRecords: [],
-    acls: [],
-    auditLogs: [],
-    performanceMetrics: []
-  };
+// Physical storage for encrypted chunks remains in vault/
+const VAULT_DIR = path.join(process.cwd(), "vault");
+const FILES_DIR = path.join(VAULT_DIR, "files");
 
+class DatabaseEngine {
   constructor() {
     this.init();
   }
 
   private init() {
-    // Create folders
     if (!fs.existsSync(VAULT_DIR)) {
       fs.mkdirSync(VAULT_DIR, { recursive: true });
     }
     if (!fs.existsSync(FILES_DIR)) {
       fs.mkdirSync(FILES_DIR, { recursive: true });
     }
-
-    // Load or create db.json
-    if (fs.existsSync(DB_FILE)) {
-      try {
-        const raw = fs.readFileSync(DB_FILE, "utf-8");
-        this.data = JSON.parse(raw);
-        // Ensure all collections exist
-        this.data.users = this.data.users || [];
-        this.data.files = this.data.files || [];
-        this.data.keyRecords = this.data.keyRecords || [];
-        this.data.acls = this.data.acls || [];
-        this.data.auditLogs = this.data.auditLogs || [];
-        this.data.performanceMetrics = this.data.performanceMetrics || [];
-      } catch (error) {
-        console.error("Failed to read database, rebuilding default...", error);
-        this.save();
-      }
-    } else {
-      this.seedDefaults();
-    }
   }
 
-  private seedDefaults() {
-    console.log("Seeding default database...");
+  // Users
+  public async getUsers(): Promise<User[]> {
+    const snapshot = await getFirestore().collection("users").get();
+    return snapshot.docs.map(doc => doc.data() as User);
+  }
+
+  public async findUserById(id: string): Promise<User | undefined> {
+    const doc = await getFirestore().collection("users").doc(id).get();
+    return doc.exists ? (doc.data() as User) : undefined;
+  }
+
+  public async findUserByUsername(username: string): Promise<User | undefined> {
+    const snapshot = await getFirestore().collection("users")
+      .where("username", "==", username)
+      .limit(1)
+      .get();
+    if (snapshot.empty) return undefined;
+    return snapshot.docs[0].data() as User;
+  }
+
+  public async addUser(user: User) {
+    await getFirestore().collection("users").doc(user.id).set(user);
+  }
+
+  // Files
+  public async getFiles(): Promise<FileMetadata[]> {
+    const snapshot = await getFirestore().collection("files").get();
+    return snapshot.docs.map(doc => doc.data() as FileMetadata);
+  }
+
+  public async findFileById(id: string): Promise<FileMetadata | undefined> {
+    const doc = await getFirestore().collection("files").doc(id).get();
+    return doc.exists ? (doc.data() as FileMetadata) : undefined;
+  }
+
+  public async addFile(file: FileMetadata) {
+    await getFirestore().collection("files").doc(file.id).set(file);
+  }
+
+  public async removeFile(id: string) {
+    const db = getFirestore();
+    const batch = db.batch();
+    batch.delete(db.collection("files").doc(id));
     
-    // Seed general admin
-    const adminRsa = generateRSAKeyPair();
-    const adminPassInfo = hashPassword("AdminSecurity2026!");
-    const adminUser: User = {
-      id: "u_admin",
-      username: "admin",
-      passwordHash: adminPassInfo.hash,
-      salt: adminPassInfo.salt,
-      role: UserRole.ADMIN,
-      createdAt: new Date().toISOString(),
-      publicKeyPem: adminRsa.publicKey,
-      // In a production app, the private key would be encrypted client-side by derivation.
-      // Here we simulate it or keep it safe.
-      privateKeyPemEncrypted: adminRsa.privateKey
-    };
-
-    // Seed test users
-    const aliceRsa = generateRSAKeyPair();
-    const alicePassInfo = hashPassword("AliceSecurePass1!");
-    const aliceUser: User = {
-      id: "u_alice",
-      username: "alice",
-      passwordHash: alicePassInfo.hash,
-      salt: alicePassInfo.salt,
-      role: UserRole.USER,
-      createdAt: new Date().toISOString(),
-      publicKeyPem: aliceRsa.publicKey,
-      privateKeyPemEncrypted: aliceRsa.privateKey
-    };
-
-    const bobRsa = generateRSAKeyPair();
-    const bobPassInfo = hashPassword("BobSecurePass2!");
-    const bobUser: User = {
-      id: "u_bob",
-      username: "bob",
-      passwordHash: bobPassInfo.hash,
-      salt: bobPassInfo.salt,
-      role: UserRole.USER,
-      createdAt: new Date().toISOString(),
-      publicKeyPem: bobRsa.publicKey,
-      privateKeyPemEncrypted: bobRsa.privateKey
-    };
-
-    this.data.users.push(adminUser, aliceUser, bobUser);
-
-    // Add seed logs
-    this.data.auditLogs.push({
-      id: "log_seed_1",
-      timestamp: new Date().toISOString(),
-      eventType: AuditEventType.KEY_GEN,
-      status: AuditStatus.SUCCESS,
-      userId: "system",
-      username: "system",
-      fileId: null,
-      fileName: null,
-      ipAddress: "127.0.0.1",
-      details: "System successfully generated RSA cryptographic identities for seed profiles (admin, alice, bob)."
-    });
-
-    this.save();
+    // Clear associations
+    const keys = await db.collection("keyRecords").where("fileId", "==", id).get();
+    keys.forEach(k => batch.delete(k.ref));
+    
+    const acls = await db.collection("acls").where("fileId", "==", id).get();
+    acls.forEach(a => batch.delete(a.ref));
+    
+    await batch.commit();
   }
 
-  public save() {
-    try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(this.data, null, 2), "utf-8");
-    } catch (e) {
-      console.error("Database failed to persist to disk:", e);
-    }
+  // Keys
+  public async getKeyRecords(): Promise<FileKeyRecord[]> {
+    const snapshot = await getFirestore().collection("keyRecords").get();
+    return snapshot.docs.map(doc => doc.data() as FileKeyRecord);
   }
 
-  // Users Collection Helpers
-  public getUsers(): User[] {
-    return this.data.users;
+  public async addKeyRecord(record: FileKeyRecord) {
+    await getFirestore().collection("keyRecords").doc(record.id).set(record);
   }
 
-  public findUserById(id: string): User | undefined {
-    return this.data.users.find((u) => u.id === id);
+  // ACL
+  public async getAcls(): Promise<FileACL[]> {
+    const snapshot = await getFirestore().collection("acls").get();
+    return snapshot.docs.map(doc => doc.data() as FileACL);
   }
 
-  public findUserByUsername(username: string): User | undefined {
-    return this.data.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
+  public async getAclsForFile(fileId: string): Promise<FileACL[]> {
+    const snapshot = await getFirestore().collection("acls").where("fileId", "==", fileId).get();
+    return snapshot.docs.map(doc => doc.data() as FileACL);
   }
 
-  public addUser(user: User) {
-    this.data.users.push(user);
-    this.save();
+  public async addAcl(acl: FileACL) {
+    await getFirestore().collection("acls").doc(acl.id).set(acl);
   }
 
-  // Files Collection Helpers
-  public getFiles(): FileMetadata[] {
-    return this.data.files;
+  public async removeAcl(id: string) {
+    await getFirestore().collection("acls").doc(id).delete();
   }
 
-  public findFileById(id: string): FileMetadata | undefined {
-    return this.data.files.find((f) => f.id === id);
+  // Audit
+  public async getAuditLogs(): Promise<AuditLog[]> {
+    const snapshot = await getFirestore().collection("auditLogs")
+      .orderBy("timestamp", "desc")
+      .limit(500)
+      .get();
+    return snapshot.docs.map(doc => doc.data() as AuditLog);
   }
 
-  public addFile(file: FileMetadata) {
-    this.data.files.push(file);
-    this.save();
-  }
-
-  public removeFile(id: string) {
-    this.data.files = this.data.files.filter((f) => f.id !== id);
-    this.data.keyRecords = this.data.keyRecords.filter((k) => k.fileId !== id);
-    this.data.acls = this.data.acls.filter((a) => a.fileId !== id);
-    this.save();
-  }
-
-  // Keys Helpers
-  public getKeyRecords(): FileKeyRecord[] {
-    return this.data.keyRecords;
-  }
-
-  public addKeyRecord(record: FileKeyRecord) {
-    this.data.keyRecords.push(record);
-    this.save();
-  }
-
-  // ACL Helpers
-  public getAcls(): FileACL[] {
-    return this.data.acls;
-  }
-
-  public getAclsForFile(fileId: string): FileACL[] {
-    return this.data.acls.filter((a) => a.fileId === fileId);
-  }
-
-  public addAcl(acl: FileACL) {
-    this.data.acls.push(acl);
-    this.save();
-  }
-
-  public removeAcl(id: string) {
-    this.data.acls = this.data.acls.filter((a) => a.id !== id);
-    this.save();
-  }
-
-  // Audit Logs
-  public getAuditLogs(): AuditLog[] {
-    return this.data.auditLogs;
-  }
-
-  public addAuditLog(log: Omit<AuditLog, "id" | "timestamp">) {
+  public async addAuditLog(log: Omit<AuditLog, "id" | "timestamp">) {
+    const id = "log_" + Math.random().toString(36).substring(2, 11);
     const fullLog: AuditLog = {
       ...log,
-      id: "log_" + Math.random().toString(36).substring(2, 11),
+      id,
       timestamp: new Date().toISOString()
     };
-    this.data.auditLogs.unshift(fullLog); // latest first
-    // Limit to 500 records to prevent bloating
-    if (this.data.auditLogs.length > 500) {
-      this.data.auditLogs = this.data.auditLogs.slice(0, 500);
-    }
-    this.save();
+    await getFirestore().collection("auditLogs").doc(id).set(fullLog);
   }
 
-  // Performance Metrics
-  public getPerformanceMetrics(): PerformanceMetric[] {
-    return this.data.performanceMetrics;
+  // Performance
+  public async getPerformanceMetrics(): Promise<PerformanceMetric[]> {
+    const snapshot = await getFirestore().collection("performanceMetrics")
+      .orderBy("timestamp", "desc")
+      .limit(200)
+      .get();
+    return snapshot.docs.map(doc => doc.data() as PerformanceMetric);
   }
 
-  public addPerformanceMetric(metric: Omit<PerformanceMetric, "id" | "timestamp">) {
+  public async addPerformanceMetric(metric: Omit<PerformanceMetric, "id" | "timestamp">) {
+    const id = "metric_" + Math.random().toString(36).substring(2, 11);
     const fullMetric: PerformanceMetric = {
       ...metric,
-      id: "metric_" + Math.random().toString(36).substring(2, 11),
+      id,
       timestamp: new Date().toISOString()
     };
-    this.data.performanceMetrics.unshift(fullMetric);
-    if (this.data.performanceMetrics.length > 200) {
-      this.data.performanceMetrics = this.data.performanceMetrics.slice(0, 200);
-    }
-    this.save();
+    await getFirestore().collection("performanceMetrics").doc(id).set(fullMetric);
   }
 
-  // Check Permissions Helper
-  public hasPermission(fileId: string, userId: string, required: "read" | "write"): boolean {
-    const file = this.findFileById(fileId);
+  // Permissions
+  public async hasPermission(fileId: string, userId: string, required: "read" | "write"): Promise<boolean> {
+    const file = await this.findFileById(fileId);
     if (!file) return false;
-    
-    // Owner has full control
     if (file.ownerId === userId) return true;
 
-    // Check ACLs
-    const user = this.findUserById(userId);
-    if (user && user.role === UserRole.ADMIN) return true; // Admin override
+    const user = await this.findUserById(userId);
+    if (user && user.role === UserRole.ADMIN) return true;
 
-    const acl = this.data.acls.find(
-      (a) => a.fileId === fileId && a.userId === userId
-    );
+    const aclSnapshot = await getFirestore().collection("acls")
+      .where("fileId", "==", fileId)
+      .where("userId", "==", userId)
+      .limit(1)
+      .get();
 
-    if (!acl) return false;
+    if (aclSnapshot.empty) return false;
+    const acl = aclSnapshot.docs[0].data() as FileACL;
 
-    if (required === "read") {
-      return true; // if they have write permission, they can read as well
-    } else {
-      return acl.permission === PermissionType.WRITE;
-    }
+    if (required === "read") return true;
+    return acl.permission === PermissionType.WRITE;
   }
 
-  // Store encrypted file reference
+  // Physical files (Zero-Trust blob storage simulated locally)
   public writeEncryptedFile(fileId: string, encryptedBuffer: Buffer) {
     const dest = path.join(FILES_DIR, fileId + ".enc");
     fs.writeFileSync(dest, encryptedBuffer);
-    console.log(`Saved encrypted file to: ${dest}`);
     return dest;
   }
 
@@ -302,7 +222,29 @@ class DatabaseEngine {
       fs.unlinkSync(targetPath);
     }
   }
+
+  // Migration Helper: Seed defaults if empty
+  public async seedIfEmpty() {
+    const snapshot = await getFirestore().collection("users").limit(1).get();
+    if (!snapshot.empty) return;
+
+    console.log("Seeding Firestore with default administrator profile...");
+    const adminRsa = generateRSAKeyPair();
+    const adminPassInfo = hashPassword("AdminSecurity2026!");
+    const adminUser: User = {
+      id: "u_admin",
+      username: "admin",
+      passwordHash: adminPassInfo.hash,
+      salt: adminPassInfo.salt,
+      role: UserRole.ADMIN,
+      createdAt: new Date().toISOString(),
+      publicKeyPem: adminRsa.publicKey,
+      privateKeyPemEncrypted: adminRsa.privateKey
+    };
+    await this.addUser(adminUser);
+  }
 }
 
 export const dbEngine = new DatabaseEngine();
 export { FILES_DIR, VAULT_DIR };
+

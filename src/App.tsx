@@ -27,8 +27,11 @@ import {
   Clock,
   Eye,
   Heart,
-  Plus
+  Plus,
+  Sparkles,
+  Zap
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import {
   generateClientRSAKeyPair,
   encryptFileClientSide,
@@ -85,6 +88,8 @@ export default function App() {
   const [metrics, setMetrics] = useState<any[]>([]);
   const [logSearch, setLogSearch] = useState("");
   const [isSysTesting, setIsSysTesting] = useState(false);
+  const [aiAuditReport, setAiAuditReport] = useState<string | null>(null);
+  const [isAuditing, setIsAuditing] = useState(false);
 
   // Interactive Decryption Animation State
   const [activeDecryptionId, setActiveDecryptionId] = useState<string | null>(null);
@@ -644,6 +649,27 @@ export default function App() {
     }
   };
 
+  const handleAiAudit = async () => {
+    if (isAuditing) return;
+    setIsAuditing(true);
+    setAiAuditReport(null);
+    try {
+      const res = await fetch("/api/ai/security-audit", {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAiAuditReport(data.analysis);
+      } else {
+        setAiAuditReport(`### ❌ Audit Failed\n${data.error || "Intelligence engine was unreachable."}`);
+      }
+    } catch (e: any) {
+      setAiAuditReport(`### ❌ Connection Error\n${e.message}`);
+    } finally {
+      setIsAuditing(false);
+    }
+  };
+
   // Drag and Drop Handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -1067,6 +1093,61 @@ export default function App() {
                   </p>
                 </div>
               </div>
+
+              {/* Intelligence Layer */}
+              {currentUser.role === UserRole.ADMIN && (
+                <div className="glass-card rounded-2xl border border-blue-500/30 bg-blue-500/5 p-6 relative overflow-hidden">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center border border-blue-500/30">
+                        <Sparkles className="w-5 h-5 text-blue-400" />
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-bold uppercase tracking-widest text-blue-200">
+                          AI Security Intelligence
+                        </h2>
+                        <p className="text-xs text-blue-400/70 mt-0.5">
+                          Leverage Gemini 2.0 Flash to analyze audit trails & detect anomalous access patterns.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleAiAudit}
+                      disabled={isAuditing}
+                      className={`px-5 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-lg ${
+                        isAuditing 
+                          ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
+                          : "bg-blue-600 hover:bg-blue-50 text-blue-100 hover:text-blue-900 shadow-blue-900/20"
+                      }`}
+                    >
+                      {isAuditing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Analyzing Logs...
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-4 h-4 fill-current" />
+                          Generate System Integrity Report
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {aiAuditReport ? (
+                    <div className="bg-slate-950/80 rounded-xl p-6 border border-slate-800/80 prose prose-invert prose-sm max-w-none animate-in fade-in slide-in-from-top-2 duration-300">
+                      <div className="markdown-body">
+                        <ReactMarkdown>{aiAuditReport}</ReactMarkdown>
+                      </div>
+                    </div>
+                  ) : !isAuditing && (
+                    <div className="flex flex-col items-center justify-center py-10 border-2 border-dashed border-slate-800/50 rounded-2xl bg-slate-900/20">
+                      <Shield className="w-12 h-12 text-slate-800 mb-3" />
+                      <p className="text-xs text-slate-500 font-medium">Intelligence engine idle. Click generate to start auditing.</p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Main Content Splitting */}
               <div className="grid grid-cols-3 gap-6">
