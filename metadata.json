@@ -1,0 +1,6 @@
+{
+  "name": "Secure Cloud File Storage",
+  "description": "A production-grade secure cloud-based file storage system featuring client-side and server-side hybrid encryption (AES-GCM + RSA-OAEP), user access control list (ACL), audit logs, and performance validation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
